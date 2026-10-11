@@ -1,10 +1,10 @@
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from fastapi import FastAPI, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import create_engine, text, select
+from sqlalchemy import create_engine, text, select, func
 from sqlalchemy.exc import OperationalError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from db import Transaction
@@ -14,8 +14,6 @@ class PaymentRequest(BaseModel):
     amount: Decimal
     currency: str
     sender: str
-
-
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -41,9 +39,20 @@ def get_db():
         db.close()
 
 #Checks for bot attempts at payment
-def detect_bots(payment: PaymentRequest, db: Session):
+def verify_payment_intensity(user_id: str, db: Session, limit: int = 3, time_window_seconds: int = 10):
 
-    return 1
+    time_threshold = datetime.now(timezone.utc) - timedelta(seconds=time_window_seconds)
+    stmt = select(func.count(Transaction.id)).where(
+        Transaction.user_id == user_id,
+        Transaction.created_at >= time_threshold)
+
+    recent_count = db.scalar(stmt) or 0
+    if recent_count >= limit:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded: Maximum {limit} "
+                   f"transactions per {time_window_seconds} seconds.")
+
 
 
 #Checks for microtransactions in short amount of time
