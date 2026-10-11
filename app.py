@@ -1,11 +1,14 @@
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
+from db import Transaction
+
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -23,10 +26,37 @@ def db_read(file: str):
         conn.exec_driver_sql(sql)  # runs raw SQL; text() would treat ":" as bind params
     print(f"File {file} loaded successfully")
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
+def validate_idempotency(payment: Payment, db: Session) -> Transaction | None:
+    stmt = select(Transaction).where(Transaction.idempotency_key == payment.idempotency_key)
+    existing = db.scalar(stmt)
+
+    #Transaction not found = proceed
+    if not existing:
+        return None
+
+    #
+    if existing.amount != payment.amount or existing.user_id != payment.sender:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Idempotency key reuse error: Payload parameters do not match original request."
+        )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_200_OK,
+            detail="Transaction processed!"
+        )
+
+
+#App lifespan cycle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Verify the connection on startup and fail with a clear message
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -41,28 +71,26 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-class Payment(BaseModel):
-    idempotency_key: int
-    sender: str
-    amount: float
+class PaymentRequest(BaseModel):
+    idempotency_key: str
+    amount: Decimal
     currency: str
-    receiver: str
+    sender: str
 
 
 @app.post("/api/payment")
-async def process_payment(payment: Payment, db: Session = Depends(get_db)):
+async def process_payment(payment: PaymentRequest, db: Session = Depends(get_db)):
     try:
-        db.execute(text("SELECT 1"))  # replace with your INSERT once the schema is settled
-    except OperationalError:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+        new_transaction = Transaction(
+            idempotency_key=payment.idempotency_key,
+            amount=payment.amount,
+            currency=payment.currency,
+            user_id=payment.sender,
+            status="PENDING"
+        )
+        db.add(new_transaction)
+        db.commit()
+        db.refresh(new_transaction)
 
     print(f"Received payment from {payment.sender} of {payment.amount} {payment.currency}")
-    return {"status": "success", "received_amount": payment.amount}
+    return {"status": "success", "received_amount": payment.amount} #what we actually return
