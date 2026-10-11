@@ -1,11 +1,11 @@
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
-
-from fastapi import FastAPI, Depends, HTTPException
+from decimal import Decimal
+from fastapi import FastAPI, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import create_engine, text, select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from db import Transaction
 
@@ -33,7 +33,7 @@ def get_db():
     finally:
         db.close()
 
-def validate_idempotency(payment: Payment, db: Session) -> Transaction | None:
+def validate_idempotency(payment: PaymentRequest, db: Session) -> Transaction | None:
     stmt = select(Transaction).where(Transaction.idempotency_key == payment.idempotency_key)
     existing = db.scalar(stmt)
 
@@ -86,11 +86,32 @@ async def process_payment(payment: PaymentRequest, db: Session = Depends(get_db)
             amount=payment.amount,
             currency=payment.currency,
             user_id=payment.sender,
-            status="PENDING"
-        )
+            status="PENDING")
+
         db.add(new_transaction)
         db.commit()
         db.refresh(new_transaction)
+
+    except IntegrityError as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Transaction with this idempotency key already exists or conflict occurred.")
+
+    except OperationalError as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable. Please try again later.")
+
+    except SQLAlchemyError as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An internal database error occurred.")
+
+    validate_idempotency(new_transaction, db)
+
 
     print(f"Received payment from {payment.sender} of {payment.amount} {payment.currency}")
     return {"status": "success", "received_amount": payment.amount} #what we actually return
