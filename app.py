@@ -9,6 +9,13 @@ from sqlalchemy.exc import OperationalError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from db import Transaction
 
+class PaymentRequest(BaseModel):
+    idempotency_key: str
+    amount: Decimal
+    currency: str
+    sender: str
+
+
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -33,7 +40,19 @@ def get_db():
     finally:
         db.close()
 
-def validate_idempotency(payment: PaymentRequest, db: Session) -> Transaction | None:
+#Checks for bot attempts at payment
+def detect_bots(payment: PaymentRequest, db: Session):
+
+    return 1
+
+
+#Checks for microtransactions in short amount of time
+def detect_micro(payment: PaymentRequest, db: Session):
+
+
+    return 1
+
+def validate_idempotency(payment: PaymentRequest, db: Session):
     stmt = select(Transaction).where(Transaction.idempotency_key == payment.idempotency_key)
     existing = db.scalar(stmt)
 
@@ -41,17 +60,14 @@ def validate_idempotency(payment: PaymentRequest, db: Session) -> Transaction | 
     if not existing:
         return None
 
-    #
     if existing.amount != payment.amount or existing.user_id != payment.sender:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Idempotency key reuse error: Payload parameters do not match original request."
         )
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_200_OK,
-            detail="Transaction processed!"
-        )
+
+    #Return the first transaction, discard the retry attempt
+    return existing
 
 
 #App lifespan cycle
@@ -68,26 +84,26 @@ async def lifespan(app: FastAPI):
     engine.dispose()
 
 
+
 app = FastAPI(lifespan=lifespan)
-
-
-class PaymentRequest(BaseModel):
-    idempotency_key: str
-    amount: Decimal
-    currency: str
-    sender: str
 
 
 @app.post("/api/payment")
 async def process_payment(payment: PaymentRequest, db: Session = Depends(get_db)):
-    try:
-        new_transaction = Transaction(
-            idempotency_key=payment.idempotency_key,
-            amount=payment.amount,
-            currency=payment.currency,
-            user_id=payment.sender,
-            status="PENDING")
 
+    # Run checks
+    validate_idempotency(payment, db)
+
+
+    #Generate database entry
+    new_transaction = Transaction(
+        idempotency_key=payment.idempotency_key,
+        amount=payment.amount,
+        currency=payment.currency,
+        user_id=payment.sender,
+        status="PENDING")
+
+    try:
         db.add(new_transaction)
         db.commit()
         db.refresh(new_transaction)
@@ -110,8 +126,9 @@ async def process_payment(payment: PaymentRequest, db: Session = Depends(get_db)
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An internal database error occurred.")
 
-    validate_idempotency(new_transaction, db)
 
 
     print(f"Received payment from {payment.sender} of {payment.amount} {payment.currency}")
     return {"status": "success", "received_amount": payment.amount} #what we actually return
+
+

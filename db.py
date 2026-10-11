@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Numeric, String, UUID, func, text
+from sqlalchemy import DateTime, Numeric, String, UUID, func, text, Index
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -16,33 +16,32 @@ class Transaction(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
-        server_default=text("gen_random_uuid()"),
-    )
+        server_default=text("gen_random_uuid()"))
     idempotency_key: Mapped[str] = mapped_column(
         String(100),
         unique=True,
-        nullable=False,
-    )
+        nullable=False)
     user_id: Mapped[str] = mapped_column(
         String(100),
-        nullable=False,
-    )
+        nullable=False)
     amount: Mapped[Decimal] = mapped_column(
         Numeric(15, 2),
-        nullable=False,
-    )
+        nullable=False)
     currency: Mapped[str] = mapped_column(
         String(3),
-        nullable=False,
-    )
+        nullable=False)
     status: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
-        server_default="APPROVED",
-    )
+        server_default="APPROVED")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=func.now(),
+        server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_user_time", "user_id", "created_at")
     )
+
+
 
