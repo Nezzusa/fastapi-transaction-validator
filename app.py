@@ -38,15 +38,22 @@ def get_db():
     finally:
         db.close()
 
-#Checks for bot attempts at payment
+# Checks incomming transactions against both tables to determine intensity of operations.
 def verify_payment_intensity(user_id: str, db: Session, limit: int = 3, time_window_seconds: int = 10):
 
     time_threshold = datetime.now(timezone.utc) - timedelta(seconds=time_window_seconds)
-    stmt = select(func.count(Transaction.id)).where(
+
+    tx_stmt = select(Transaction).where(
         Transaction.user_id == user_id,
         Transaction.created_at >= time_threshold)
 
-    recent_count = db.scalar(stmt) or 0
+    fraud_stmt = select(FraudLog).where(
+        FraudLog.user_id == user_id,
+        FraudLog.triggered_at >= time_threshold)
+
+    combined_subquery = tx_stmt.union_all(fraud_stmt).subquery()
+    recent_count = db.scalar(select(func.count()).select_from(combined_subquery)) or 0
+
     if recent_count >= limit:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

@@ -1,8 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-
-from sqlalchemy import DateTime, Numeric, String, UUID, func, text, Index
+from sqlalchemy import DateTime, Numeric, String, UUID, func, text, Index, BigInteger
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -45,3 +44,23 @@ class Transaction(Base):
 
 
 
+class FraudLogs(Base):
+    __tablename__ = "fraud_logs"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False)
+    attempted_amount: Mapped[Decimal] = mapped_column(
+        Numeric(15, 2),
+        nullable=False)
+    rule_triggered: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False)
+    triggered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now())
