@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, text, select, func
 from sqlalchemy.exc import OperationalError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
-from db import Transaction
+from db import Transaction, FraudLogs
 
 class PaymentRequest(BaseModel):
     idempotency_key: str
@@ -28,8 +28,9 @@ def db_read(file: str):
     with open(file, "r") as f:
         sql = f.read()
     with engine.begin() as conn:
-        conn.exec_driver_sql(sql)  # runs raw SQL; text() would treat ":" as bind params
+        conn.exec_driver_sql(sql)
     print(f"File {file} loaded successfully")
+
 
 def get_db():
     db = SessionLocal()
@@ -38,55 +39,101 @@ def get_db():
     finally:
         db.close()
 
-# Checks incomming transactions against both tables to determine intensity of operations.
-def verify_payment_intensity(user_id: str, db: Session, limit: int = 3, time_window_seconds: int = 10):
 
+def log_fraud(db: Session, user_id: str, attempted_amount: Decimal, rule_triggered: str):
+    try:
+        fraud_entry = FraudLogs(
+            user_id=user_id,
+            attempted_amount=attempted_amount,
+            rule_triggered=rule_triggered
+        )
+        db.add(fraud_entry)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Failed to record fraud log: {e}")
+
+
+def verify_payment_intensity(user_id: str, attempted_amount: Decimal, db: Session, limit: int = 3, time_window_seconds: int = 10):
     time_threshold = datetime.now(timezone.utc) - timedelta(seconds=time_window_seconds)
 
-    tx_stmt = select(Transaction).where(
-        Transaction.user_id == user_id,
-        Transaction.created_at >= time_threshold)
 
-    fraud_stmt = select(FraudLog).where(
-        FraudLog.user_id == user_id,
-        FraudLog.triggered_at >= time_threshold)
+    tx_stmt = select(Transaction.id.label("id")).where(
+        Transaction.user_id == user_id,
+        Transaction.created_at >= time_threshold
+    )
+
+    fraud_stmt = select(FraudLogs.id.label("id")).where(
+        FraudLogs.user_id == user_id,
+        FraudLogs.triggered_at >= time_threshold
+    )
 
     combined_subquery = tx_stmt.union_all(fraud_stmt).subquery()
     recent_count = db.scalar(select(func.count()).select_from(combined_subquery)) or 0
 
     if recent_count >= limit:
+        log_fraud(db, user_id=user_id, attempted_amount=attempted_amount,
+                  rule_triggered="RATE_LIMIT_EXCEEDED")
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded: Maximum {limit} "
-                   f"transactions per {time_window_seconds} seconds.")
+            detail=f"Rate limit exceeded: Maximum {limit} transactions per "
+                   f"{time_window_seconds} seconds."
+        )
 
 
+def verify_payment_limits(payment: PaymentRequest, db: Session, max_count: int = 5,
+                          max_volume: Decimal = Decimal("5000.00"),
+                          time_window_seconds: int = 3600):
 
-#Checks for microtransactions in short amount of time
-def detect_micro(payment: PaymentRequest, db: Session):
+    time_threshold = datetime.now(timezone.utc) - timedelta(seconds=time_window_seconds)
 
+    stmt = (
+        select(
+            func.count(Transaction.id).label("count"),
+            func.coalesce(func.sum(Transaction.amount), Decimal("0.00")).label("total_amount")
+        ).where(
+            Transaction.user_id == payment.sender,
+            Transaction.created_at >= time_threshold,
+            Transaction.status == "APPROVED"
+        )
+    )
 
-    return 1
+    recent_count, recent_volume = db.execute(stmt).one()
+
+    if recent_count >= max_count:
+        log_fraud(db, user_id=payment.sender, attempted_amount=payment.amount,
+                  rule_triggered="COUNT_LIMIT_EXCEEDED")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded: Maximum {max_count} transactions per window."
+        )
+
+    if (recent_volume + payment.amount) > max_volume:
+        log_fraud(db, user_id=payment.sender, attempted_amount=payment.amount,
+                  rule_triggered="VOLUME_LIMIT_EXCEEDED")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Volume limit exceeded: Maximum ${max_volume} cumulative limit. "
+                   f"Current total: ${recent_volume:.2f}."
+        )
+
 
 def validate_idempotency(payment: PaymentRequest, db: Session):
     stmt = select(Transaction).where(Transaction.idempotency_key == payment.idempotency_key)
     existing = db.scalar(stmt)
 
-    #Transaction not found = proceed
     if not existing:
         return None
 
     if existing.amount != payment.amount or existing.user_id != payment.sender:
+        log_fraud(db, user_id=payment.sender, attempted_amount=payment.amount,
+                  rule_triggered="IDEMPOTENCY_PAYLOAD_MISMATCH")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Idempotency key reuse error: Payload parameters do not match original request."
-        )
-
-    #Return the first transaction, discard the retry attempt
+            detail="Idempotency key reuse error: Payload parameters do not match original request.")
     return existing
 
 
-#App lifespan cycle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -100,51 +147,52 @@ async def lifespan(app: FastAPI):
     engine.dispose()
 
 
-
 app = FastAPI(lifespan=lifespan)
 
 
 @app.post("/api/payment")
 async def process_payment(payment: PaymentRequest, db: Session = Depends(get_db)):
 
-    # Run checks
-    validate_idempotency(payment, db)
+    #Security checks
+    existing_transaction = validate_idempotency(payment, db)
+    if existing_transaction:
+        return {
+            "status": "success",
+            "received_amount": existing_transaction.amount
+        }
+    verify_payment_intensity(payment.sender, payment.amount, db)
+    verify_payment_limits(payment, db)
 
-
-    #Generate database entry
+    #Create new transaction
     new_transaction = Transaction(
         idempotency_key=payment.idempotency_key,
         amount=payment.amount,
         currency=payment.currency,
         user_id=payment.sender,
-        status="PENDING")
+        status="APPROVED")
 
     try:
         db.add(new_transaction)
         db.commit()
         db.refresh(new_transaction)
 
-    except IntegrityError as e:
+    except IntegrityError:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Transaction with this idempotency key already exists or conflict occurred.")
-
-    except OperationalError as e:
+            detail="Transaction with this idempotency key already exists or conflict occurred."
+        )
+    except OperationalError:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable. Please try again later.")
-
-    except SQLAlchemyError as e:
+            detail="Database temporarily unavailable. Please try again later."
+        )
+    except SQLAlchemyError:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An internal database error occurred.")
+            detail="An internal database error occurred."
+        )
 
-
-
-    print(f"Received payment from {payment.sender} of {payment.amount} {payment.currency}")
-    return {"status": "success", "received_amount": payment.amount} #what we actually return
-
-
+    return {"status": "success", "received_amount": new_transaction.amount}

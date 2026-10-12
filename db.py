@@ -8,9 +8,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 class Base(DeclarativeBase):
     pass
 
-
 class Transaction(Base):
     __tablename__ = "transactions"
+    __table_args__ = (
+        Index("idx_transactions_user_created", "user_id", "created_at"))
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -38,14 +39,11 @@ class Transaction(Base):
         nullable=False,
         server_default=func.now())
 
-    __table_args__ = (
-        Index("idx_user_time", "user_id", "created_at")
-    )
-
-
 
 class FraudLogs(Base):
     __tablename__ = "fraud_logs"
+    __table_args__ = (
+        Index("idx_fraud_logs_user_triggered", "user_id", "triggered_at"))
 
     id: Mapped[int] = mapped_column(
         BigInteger,
