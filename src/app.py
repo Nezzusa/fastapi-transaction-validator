@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, text, select, func
 from sqlalchemy.exc import OperationalError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
-from db import Transaction, FraudLogs
+from src.db import Transaction, FraudLogs
 
 class PaymentRequest(BaseModel):
     idempotency_key: str
@@ -148,7 +148,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-
+get_db()
+db_read('tables.sql')
 
 @app.post("/api/payment")
 async def process_payment(payment: PaymentRequest, db: Session = Depends(get_db)):
@@ -196,3 +197,10 @@ async def process_payment(payment: PaymentRequest, db: Session = Depends(get_db)
         )
 
     return {"status": "success", "received_amount": new_transaction.amount}
+
+
+
+
+
+
+
