@@ -199,7 +199,6 @@ async def process_payment(payment: PaymentRequest, db: Session = Depends(get_db)
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An internal database error occurred."
         )
-
     return {"status": "success", "received_amount": new_transaction.amount}
 
 
