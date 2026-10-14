@@ -1,49 +1,52 @@
+import os
+from src.app import app, engine, SessionLocal  # noqa: E402
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-from src.app import app, get_db
-from src.db import Base
+from sqlalchemy import create_engine, text
 
 
-SQLALCHEMY_TEST_DATABASE_URL = "sqlite:///./test.db"
-
-engine = create_engine(
-    SQLALCHEMY_TEST_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+TEST_DB = "paymentprocessing_test"
+BASE_URL = "postgresql+psycopg2://postgres:admin@localhost:5432"
+os.environ["DATABASE_URL"] = f"{BASE_URL}/{TEST_DB}"
 
 
-@pytest.fixture(scope="session", autouse=True)
-def setup_test_db():
-    Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
+def _ensure_test_db() -> None:
+    admin = create_engine(f"{BASE_URL}/postgres", isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as conn:
+            exists = conn.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :n"),
+                {"n": TEST_DB},
+            ).scalar()
+            if not exists:
+                conn.execute(text(f'CREATE DATABASE "{TEST_DB}"'))
+    finally:
+        admin.dispose()
+
+
+_ensure_test_db()
+
+
+@pytest.fixture(scope="session")
+def client():
+    # Context manager runs the lifespan -> connects and loads src/tables.sql
+    with TestClient(app) as c:
+        yield c
 
 
 @pytest.fixture
 def db_session():
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
-
-    yield session
-
-    session.close()
-    transaction.rollback()
-    connection.close()
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
-@pytest.fixture
-def client(db_session):
-    def _get_test_db():
-        try:
-            yield db_session
-        finally:
-            pass
-
-    app.dependency_overrides[get_db] = _get_test_db
-    with TestClient(app) as c:
-        yield c
-    app.dependency_overrides.clear()
+@pytest.fixture(autouse=True)
+def clean_tables(client):
+    with engine.begin() as conn:
+        conn.execute(
+            text("TRUNCATE TABLE fraud_logs, transactions RESTART IDENTITY CASCADE")
+        )
+    yield

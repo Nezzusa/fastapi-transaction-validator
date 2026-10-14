@@ -52,24 +52,27 @@ def log_fraud(db: Session, user_id: str, attempted_amount: Decimal, rule_trigger
     except Exception as e:
         db.rollback()
         print(f"Failed to record fraud log: {e}")
+        raise e
 
 
 def verify_payment_intensity(user_id: str, attempted_amount: Decimal, db: Session, limit: int = 3, time_window_seconds: int = 10):
     time_threshold = datetime.now(timezone.utc) - timedelta(seconds=time_window_seconds)
 
+    tx_count = db.scalar(
+        select(func.count()).select_from(Transaction).where(
+            Transaction.user_id == user_id,
+            Transaction.created_at >= time_threshold,
+        )
+    ) or 0
 
-    tx_stmt = select(Transaction.id.label("id")).where(
-        Transaction.user_id == user_id,
-        Transaction.created_at >= time_threshold
-    )
+    fraud_count = db.scalar(
+        select(func.count()).select_from(FraudLogs).where(
+            FraudLogs.user_id == user_id,
+            FraudLogs.triggered_at >= time_threshold,
+        )
+    ) or 0
 
-    fraud_stmt = select(FraudLogs.id.label("id")).where(
-        FraudLogs.user_id == user_id,
-        FraudLogs.triggered_at >= time_threshold
-    )
-
-    combined_subquery = tx_stmt.union_all(fraud_stmt).subquery()
-    recent_count = db.scalar(select(func.count()).select_from(combined_subquery)) or 0
+    recent_count = tx_count + fraud_count
 
     if recent_count >= limit:
         log_fraud(db, user_id=user_id, attempted_amount=attempted_amount,
@@ -142,14 +145,14 @@ async def lifespan(app: FastAPI):
         print("Connected to PostgreSQL")
     except OperationalError as e:
         raise RuntimeError(f"Cannot connect to PostgreSQL: {e.orig}") from e
-    db_read("tables.sql")
+    db_read("src/tables.sql")
     yield
     engine.dispose()
 
+get_db()
 
 app = FastAPI(lifespan=lifespan)
-get_db()
-db_read('tables.sql')
+
 
 @app.post("/api/payment")
 async def process_payment(payment: PaymentRequest, db: Session = Depends(get_db)):
@@ -159,7 +162,8 @@ async def process_payment(payment: PaymentRequest, db: Session = Depends(get_db)
     if existing_transaction:
         return {
             "status": "success",
-            "received_amount": existing_transaction.amount
+            "received_amount": existing_transaction.amount,
+            "idempotent_retry": True
         }
     verify_payment_intensity(payment.sender, payment.amount, db)
     verify_payment_limits(payment, db)
