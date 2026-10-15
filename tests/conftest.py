@@ -1,13 +1,13 @@
 import os
-from src.app import app, engine, SessionLocal  # noqa: E402
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
-
 TEST_DB = "paymentprocessing_test"
-BASE_URL = "postgresql+psycopg2://postgres:admin@localhost:5432"
-os.environ["DATABASE_URL"] = f"{BASE_URL}/{TEST_DB}"
+BASE_URL = "postgresql+psycopg2://postgres:admin@db:5432"
+TEST_DATABASE_URL = f"{BASE_URL}/{TEST_DB}"
+
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 
 def _ensure_test_db() -> None:
@@ -26,10 +26,11 @@ def _ensure_test_db() -> None:
 
 _ensure_test_db()
 
+from src.app import app, engine, SessionLocal
+from src.db import Base
 
 @pytest.fixture(scope="session")
 def client():
-    # Context manager runs the lifespan -> connects and loads src/tables.sql
     with TestClient(app) as c:
         yield c
 

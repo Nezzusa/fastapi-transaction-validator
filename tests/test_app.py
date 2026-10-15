@@ -1,8 +1,14 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from src.db import FraudLogs, Transaction
 
+
+def test_verify_connected_database(db_session):
+    db_name = db_session.execute(text("SELECT current_database()")).scalar()
+    print(f"\n[TEST EXECUTION] Connected to database: {db_name}")
+
+    assert db_name == "paymentprocessing_test"
 
 def make_payload(key, amount="10.00", sender="user_test", currency="USD"):
     return {
