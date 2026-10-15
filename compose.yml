@@ -1,22 +1,22 @@
 services:
   db:
     image: postgres:17
+    # Credentials below are for demonstration of the project; not a production practice
     environment:
       POSTGRES_DB: paymentprocessing
-      POSTGRES_USER: postgress
+      POSTGRES_USER: postgres
       POSTGRES_PASSWORD: admin
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U myuser -d myapp"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d paymentprocessing"]
       interval: 5s
       timeout: 5s
       retries: 10
-
   app:
     build: .
     environment:
-      DATABASE_URL: postgresql+psycopg://postgress:admin@db:5432/paymentprocessing
+      DATABASE_URL: postgresql+psycopg2://postgres:admin@db:5432/paymentprocessing
     ports:
       - "8000:8000"
     depends_on:

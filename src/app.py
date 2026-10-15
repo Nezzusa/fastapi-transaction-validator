@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from fastapi import FastAPI, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text, select, func
 from sqlalchemy.exc import OperationalError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
@@ -11,13 +11,13 @@ from src.db import Transaction, FraudLogs
 
 class PaymentRequest(BaseModel):
     idempotency_key: str
-    amount: Decimal
-    currency: str
+    amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+    currency: str = Field(min_length=3, max_length=3)
     sender: str
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+psycopg2://postgres:admin@localhost:5432/paymentprocessing",
+    "postgresql+psycopg2://postgres:admin@db:5432/paymentprocessing",
 )
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
@@ -128,7 +128,7 @@ def validate_idempotency(payment: PaymentRequest, db: Session):
     if not existing:
         return None
 
-    if existing.amount != payment.amount or existing.user_id != payment.sender:
+    if existing.amount != payment.amount or existing.user_id != payment.sender or existing.currency != payment.currency:
         log_fraud(db, user_id=payment.sender, attempted_amount=payment.amount,
                   rule_triggered="IDEMPOTENCY_PAYLOAD_MISMATCH")
         raise HTTPException(
@@ -148,14 +148,11 @@ async def lifespan(app: FastAPI):
     db_read("src/tables.sql")
     yield
     engine.dispose()
-
-get_db()
-
 app = FastAPI(lifespan=lifespan)
 
 
 @app.post("/api/payment")
-async def process_payment(payment: PaymentRequest, db: Session = Depends(get_db)):
+def process_payment(payment: PaymentRequest, db: Session = Depends(get_db)):
 
     #Security checks
     existing_transaction = validate_idempotency(payment, db)

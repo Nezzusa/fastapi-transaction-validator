@@ -1,8 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-
 from sqlalchemy import func, select
-
 from src.db import FraudLogs, Transaction
 
 
@@ -16,7 +14,6 @@ def make_payload(key, amount="10.00", sender="user_test", currency="USD"):
 
 
 def seed_transactions(db_session, user, count, amount, minutes_ago=5):
-    """Insert APPROVED transactions older than the 10s intensity window."""
     created = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
     for i in range(count):
         db_session.add(
