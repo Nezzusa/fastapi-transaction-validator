@@ -42,6 +42,9 @@ To reset all data: `docker compose down -v`.
 > Run `docker compose down -v` to remove it, or find it with
 > `docker volume ls` and delete it with `docker volume rm <name>` manually.
 
+## Rules:
+![Fraud rules](/docs/fraud_rules.jpg)
+
 ## Usage
 
 `POST /api/payment`
@@ -82,11 +85,16 @@ created automatically, so your demo data is never touched.
     │   ├── app.py        # FastAPI app, endpoint, fraud rules
     │   ├── db.py         # SQLAlchemy models
     │   └── tables.sql    # Idempotent schema, run on startup
+    ├── docs/             # README.md, license and images
     ├── tests/
     │   ├── conftest.py   # Test DB setup and fixtures
     │   └── test_app.py
+    ├── .gitignore
+    ├── .dockerignore
     ├── Dockerfile
-    └── docker-compose.yml
+    ├── pytest.ini
+    ├── requirements.txt
+    └── compose.yml
 
 ## Design Decisions
 
