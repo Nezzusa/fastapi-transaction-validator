@@ -5,7 +5,7 @@
 
 ## Description
 
-This project features a fully containerized API built on the FastAPI framework as part of my learning process exploring RESTful architecture and a Test-Driven Development (TDD) approach. Built in Python 3.14.7 
+This project features a fully containerized API built on the FastAPI framework as part of my learning process exploring RESTful architecture and a Test-Driven Development (TDD) approach. Built with Python 3.14.7 
 
 Its purpose is to provide an entry point for incoming transactions to be validated using Pydantic models and evaluated for potential fraud based on a defined set of rules, including:
 
@@ -16,6 +16,7 @@ Its purpose is to provide an entry point for incoming transactions to be validat
 It also includes an automated test suite built with **pytest** running against an isolated test database.
 
 ## Tech Stack
+* **Language:** Python 3.14.7,
 * **Framework:** FastAPI, 
 * **Database:** PostgreSQL 17
 * **ORM:** SQLAlchemy
